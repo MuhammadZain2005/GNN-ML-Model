@@ -160,6 +160,22 @@ if __name__ == "__main__":
         ml = MaterialML(dft_path)
         train_loader, val_loader = ml.prepare_data()
         
+        # Print data statistics
+        for batch in train_loader:
+            energies_per_atom = batch.y
+            n_atoms = batch.n_atoms
+            total_energies = energies_per_atom * n_atoms
+            
+            print("\nTraining Data Statistics:")
+            print(f"Energy per atom range: {energies_per_atom.min():.4f} to {energies_per_atom.max():.4f} eV/atom")
+            print(f"Energy per atom mean: {energies_per_atom.mean():.4f} eV/atom")
+            print(f"Energy per atom std: {energies_per_atom.std():.4f} eV/atom")
+            print(f"Total energy range: {total_energies.min():.4f} to {total_energies.max():.4f} eV")
+            print(f"Total energy mean: {total_energies.mean():.4f} eV")
+            print(f"Total energy std: {total_energies.std():.4f} eV")
+            print(f"System size range: {n_atoms.min().item()} to {n_atoms.max().item()} atoms")
+            break  # Only need first batch for statistics
+        
         # Train model
         ml.train(train_loader, val_loader)
         
@@ -169,17 +185,47 @@ if __name__ == "__main__":
         with torch.no_grad():
             for batch in val_loader:
                 pred = ml.predict(batch)
+                print("\nBatch Statistics:")
+                print(f"Batch size: {len(pred)} systems")
+                
+                total_abs_error_per_atom = 0
+                total_abs_error = 0
+                
                 # Print predictions for each graph in the batch
                 for i in range(len(pred)):
+                    n_atoms = batch.n_atoms[i]
+                    
+                    # Convert back to total energy for comparison
+                    pred_total = pred[i].item() * n_atoms
+                    actual_total = batch.y[i].item() * n_atoms
+                    
+                    # Calculate errors
+                    error_per_atom = abs(pred[i].item() - batch.y[i].item())
+                    error_total = abs(pred_total - actual_total)
+                    
+                    total_abs_error_per_atom += error_per_atom
+                    total_abs_error += error_total
+                    
                     print(f"\nGraph {i+1} in batch:")
-                    print(f"Predicted energy: {pred[i].item():.4f} eV")
-                    print(f"Actual energy: {batch.y[i].item():.4f} eV")
-                    print(f"Absolute error: {abs(pred[i].item() - batch.y[i].item()):.4f} eV")
+                    print(f"Number of atoms: {n_atoms}")
+                    print(f"Predicted energy per atom: {pred[i].item():.4f} eV/atom")
+                    print(f"Actual energy per atom: {batch.y[i].item():.4f} eV/atom")
+                    print(f"Predicted total energy: {pred_total:.4f} eV")
+                    print(f"Actual total energy: {actual_total:.4f} eV")
+                    print(f"Absolute error per atom: {error_per_atom:.4f} eV/atom")
+                    print(f"Absolute total error: {error_total:.4f} eV")
+                
+                # Print batch summary
+                avg_error_per_atom = total_abs_error_per_atom / len(pred)
+                avg_error_total = total_abs_error / len(pred)
+                print(f"\nBatch Summary:")
+                print(f"Average absolute error per atom: {avg_error_per_atom:.4f} eV/atom")
+                print(f"Average absolute total error: {avg_error_total:.4f} eV")
                 break  # Just show first batch
                 
     except Exception as e:
         print(f"Error: {str(e)}")
-
+        
 # Normalise energy by  dividing by number of atoms 
 # Visualize it 
 # VESTA to visualizePOSCAR files , POSCAR have lattice vectorrs line 3-5 are lattice vectors , all below are lattice positions
