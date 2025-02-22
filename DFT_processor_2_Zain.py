@@ -60,7 +60,7 @@ class DFTProcessor:
         return final_energy, final_forces
 
     def build_graph(self, atom_positions, atom_types, forces, energy, cutoff=3.0):
-        """Construct graph from atomic structure and features"""
+        """Construct graph from atomic structure and features with normalized energy"""
         try:
             positions = np.array(atom_positions)
             n_atoms = len(positions)
@@ -92,9 +92,18 @@ class DFTProcessor:
                 ])
             
             x = torch.tensor(features, dtype=torch.float)
-            y = torch.tensor([energy], dtype=torch.float)
             
-            return Data(x=x, edge_index=edge_index, y=y)
+            # Normalize energy by number of atoms
+            normalized_energy = energy / n_atoms
+            y = torch.tensor([normalized_energy], dtype=torch.float)
+            
+            # Store both normalized and raw energy in the graph
+            # This allows us to convert back if needed
+            graph = Data(x=x, edge_index=edge_index, y=y)
+            graph.raw_energy = torch.tensor([energy], dtype=torch.float)
+            graph.n_atoms = n_atoms
+            
+            return graph
             
         except Exception as e:
             print(f"Error building graph: {e}")
