@@ -1,13 +1,14 @@
 import torch
 from torch_geometric.loader import DataLoader
-from DFT_processor import DFTProcessor
+from DFT_processor_2_Zain import DFTProcessor
 from gnn_model import GNNModel
 import os
 
 class MaterialML:
     def __init__(self, dft_data_path):
         """Initialize with path to DFT data"""
-        self.processor = DFTProcessor(dft_data_path)
+        self.dft_data_path = dft_data_path
+        self.graphs = None  # Will store processed graphs
         self.model = None
         
         # Create models directory if it doesn't exist
@@ -17,29 +18,31 @@ class MaterialML:
         
     def prepare_data(self):
         """Process DFT data and prepare training set"""
-        graphs = self.processor.process_directory()
+        # Create processor and process data
+        processor = DFTProcessor(self.dft_data_path)
+        self.graphs = processor.process_directory()
         
-        if not graphs:
+        if not self.graphs:
             raise ValueError(f"""
 No graphs were created. Possible reasons:
-1. Incorrect DFT data path: {self.processor.dft_data_path}
+1. Incorrect DFT data path: {self.dft_data_path}
 2. Missing required files (POSCAR and OUTCAR)
 3. Errors in processing the DFT files
 Check the debug output above for more details.
 """)
         
         # Energy values are already included in the graphs from DFT_processor
-        print(f"Number of graphs loaded: {len(graphs)}")
+        print(f"Number of graphs loaded: {len(self.graphs)}")
         print("\nData Statistics:")
-        energies = torch.stack([g.y for g in graphs])
+        energies = torch.stack([g.y for g in self.graphs])
         print(f"Energy range: {energies.min():.4f} to {energies.max():.4f} eV")
         print(f"Mean energy: {energies.mean():.4f} eV")
         print(f"Energy std: {energies.std():.4f} eV")
         
         # Split into training and validation sets (80-20 split)
-        n_train = int(0.8 * len(graphs))
-        train_graphs = graphs[:n_train]
-        val_graphs = graphs[n_train:]
+        n_train = int(0.8 * len(self.graphs))
+        train_graphs = self.graphs[:n_train]
+        val_graphs = self.graphs[n_train:]
         
         print(f"\nSplit sizes:")
         print(f"Training graphs: {len(train_graphs)}")
@@ -176,3 +179,10 @@ if __name__ == "__main__":
                 
     except Exception as e:
         print(f"Error: {str(e)}")
+
+# Normalise energy by  dividing by number of atoms 
+# Visualize it 
+# VESTA to visualizePOSCAR files , POSCAR have lattice vectorrs line 3-5 are lattice vectors , all below are lattice positions
+# POSCAR files for postition OUTCAR output of DFT
+# Weights difference for boron cabron
+# Energy / Atoms
