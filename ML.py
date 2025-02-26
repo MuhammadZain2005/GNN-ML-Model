@@ -18,137 +18,147 @@ class MaterialML:
         
     def prepare_data(self):
         """Process DFT data and prepare training set"""
-        # Create processor and process data
         processor = DFTProcessor(self.dft_data_path)
         self.graphs = processor.process_directory()
         
         if not self.graphs:
-            raise ValueError(f"""
-No graphs were created. Possible reasons:
-1. Incorrect DFT data path: {self.dft_data_path}
-2. Missing required files (POSCAR and OUTCAR)
-3. Errors in processing the DFT files
-Check the debug output above for more details.
-""")
-        
-        # Energy values are already included in the graphs from DFT_processor
-        print(f"Number of graphs loaded: {len(self.graphs)}")
-        print("\nData Statistics:")
-        energies = torch.stack([g.y for g in self.graphs])
-        print(f"Energy range: {energies.min():.4f} to {energies.max():.4f} eV")
-        print(f"Mean energy: {energies.mean():.4f} eV")
-        print(f"Energy std: {energies.std():.4f} eV")
+            raise ValueError("No valid graphs were created. Check DFT data and processing steps.")
         
         # Split into training and validation sets (80-20 split)
         n_train = int(0.8 * len(self.graphs))
         train_graphs = self.graphs[:n_train]
         val_graphs = self.graphs[n_train:]
         
-        print(f"\nSplit sizes:")
-        print(f"Training graphs: {len(train_graphs)}")
-        print(f"Validation graphs: {len(val_graphs)}")
-        
-        # Create data loaders with smaller batch size
-        train_loader = DataLoader(train_graphs, batch_size=16, shuffle=True)
-        val_loader = DataLoader(val_graphs, batch_size=16, shuffle=False)
+        train_loader = DataLoader(train_graphs, batch_size=32, shuffle=True)
+        val_loader = DataLoader(val_graphs, batch_size=32, shuffle=False)
         
         return train_loader, val_loader
 
-    def train(self, train_loader, val_loader, hidden_dim=64, lr=0.001, epochs=100):
-        """Train GNN model"""
-        # Get dimensions from data
+    def train(self, train_loader, val_loader, hidden_dim=128, lr=0.0005, epochs=200):
+        """Train GNN model with updated parameters"""
         input_dim = train_loader.dataset[0].x.shape[1]  # Number of node features
-        output_dim = 1  # Energy prediction (scalar)
+        output_dim = 1  # Energy prediction
         
-        # Initialize model
         self.model = GNNModel(input_dim, hidden_dim, output_dim)
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr)
         criterion = torch.nn.MSELoss()
         
-        print("\nTraining Model:")
-        print(f"Input dimensions: {input_dim}")
-        print(f"Hidden dimensions: {hidden_dim}")
-        print(f"Output dimensions: {output_dim}")
-        print(f"Learning rate: {lr}")
-        print(f"Number of epochs: {epochs}\n")
-        
         best_val_loss = float('inf')
-        patience = 10
+        patience = 20
         patience_counter = 0
-        
-        # Path for best model
         best_model_path = os.path.join(self.models_dir, "best_model.pth")
         
         for epoch in range(epochs):
-            # Training
             self.model.train()
             total_loss = 0
             for batch in train_loader:
                 optimizer.zero_grad()
                 out = self.model(batch)
-                loss = criterion(out, batch.y)
+                loss = criterion(out.squeeze(-1), batch.y)
                 loss.backward()
                 optimizer.step()
                 total_loss += loss.item()
             
             avg_train_loss = total_loss / len(train_loader)
             
-            # Validation
             self.model.eval()
             val_loss = 0
             with torch.no_grad():
                 for batch in val_loader:
                     out = self.model(batch)
-                    val_loss += criterion(out, batch.y).item()
+                    val_loss += criterion(out.squeeze(-1), batch.y).item()
             avg_val_loss = val_loss / len(val_loader)
             
-            # Print progress
-            if (epoch + 1) % 10 == 0:
-                print(f"Epoch {epoch+1}/{epochs}")
-                print(f"Training Loss: {avg_train_loss:.6f}")
-                print(f"Validation Loss: {avg_val_loss:.6f}\n")
+            print(f"Epoch {epoch+1}/{epochs} | Train Loss: {avg_train_loss:.6f} | Val Loss: {avg_val_loss:.6f}")
             
-            # Early stopping
             if avg_val_loss < best_val_loss:
                 best_val_loss = avg_val_loss
                 patience_counter = 0
-                # Save best model
                 self.save_model(best_model_path)
-                print(f"New best model saved with validation loss: {avg_val_loss:.6f}")
+                print(f"New best model saved with val loss: {avg_val_loss:.6f}")
             else:
                 patience_counter += 1
                 if patience_counter >= patience:
                     print(f"Early stopping at epoch {epoch+1}")
                     break
         
-        # Load best model
         self.load_model(best_model_path)
-        print(f"\nTraining completed. Best validation loss: {best_val_loss:.6f}")
-        print(f"Best model saved at: {best_model_path}")
-        
-    def predict(self, data):
-        """Make predictions using trained model"""
+        print(f"Training completed. Best validation loss: {best_val_loss:.6f}")
+    
+    def predict(self, data=None):
         if self.model is None:
             raise ValueError("Model not trained or loaded")
         
         self.model.eval()
+        
         with torch.no_grad():
             return self.model(data)
     
+    def predict_from_poscar(self, poscar_files):
+        """Make predictions using only POSCAR files without requiring OUTCAR data"""
+        if self.model is None:
+            raise ValueError("Model not trained or loaded")
+        
+        # Initialize processor
+        processor = DFTProcessor(self.dft_data_path)
+        
+        # Create graphs from POSCAR files
+        graphs = []
+        for poscar_file in poscar_files:
+            # Read structure data
+            lattice_vectors, atom_positions, n_boron, n_carbon, total_atoms = processor.read_POSCAR(poscar_file)
+            
+            # Create atom types list
+            atom_types = ["B"] * n_boron + ["C"] * n_carbon
+            
+            # For prediction, we don't have forces or energy, so use dummy values
+            dummy_forces = [[0.0, 0.0, 0.0] for _ in range(total_atoms)]
+            dummy_energy = 0.0  # This will be replaced by the prediction
+            
+            # Build graph
+            graph = processor.build_graph(atom_positions, atom_types, dummy_forces, dummy_energy)
+            
+            if graph is not None:
+                graphs.append(graph)
+                print(f"Created graph from {poscar_file} with {total_atoms} atoms ({n_boron} B, {n_carbon} C)")
+            else:
+                print(f"Failed to create graph from {poscar_file}")
+        
+        if not graphs:
+            raise ValueError("Failed to create any valid graphs from the POSCAR files")
+        
+        # Create a batch from the graphs
+        loader = DataLoader(graphs, batch_size=len(graphs))
+        
+        # Make predictions
+        self.model.eval()
+        predictions = []
+        atoms_counts = []
+        
+        with torch.no_grad():
+            for batch in loader:
+                out = self.model(batch)
+                for i in range(len(out)):
+                    predictions.append(out[i].item())
+                    atoms_counts.append(batch.n_atoms[i].item() if hasattr(batch, 'n_atoms') else graphs[i].n_atoms)
+        
+        # Return predictions with atoms counts for reference
+        return list(zip(predictions, atoms_counts))
+
     def save_model(self, path):
-        """Save trained model"""
         if self.model is None:
             raise ValueError("No model to save")
         torch.save(self.model.state_dict(), path)
         
     def load_model(self, path):
-        """Load pre-trained model"""
         if not os.path.exists(path):
             raise ValueError(f"Model file not found: {path}")
         if self.model is None:
-            raise ValueError("Model not initialized")
+            input_dim = self.graphs[0].x.shape[1] if self.graphs else 7
+            self.model = GNNModel(input_dim=input_dim, hidden_dim=128, output_dim=1)
         self.model.load_state_dict(torch.load(path))
         self.model.eval()
+
 
 if __name__ == "__main__":
     # Example usage
@@ -222,6 +232,31 @@ if __name__ == "__main__":
                 print(f"Average absolute error per atom: {avg_error_per_atom:.4f} eV/atom")
                 print(f"Average absolute total error: {avg_error_total:.4f} eV")
                 break  # Just show first batch
+                
+        # Example usage of the new POSCAR-only prediction
+        # Uncomment to test prediction from POSCAR files directly
+        print("\nTesting prediction from POSCAR files:")
+        model_path = os.path.join(ml.models_dir, "best_model.pth")
+        if os.path.exists(model_path):
+            ml.load_model(model_path)
+            
+            # Replace with actual paths to your unit cell and supercell POSCAR files
+            unit_cell_poscar = "DFT_data/DFT_data/POSCAR/Unit_Super/POSCAR_unitcell.vasp"
+            supercell_poscar = "DFT_data/DFT_data/POSCAR/Unit_Super/POSCAR_supercell.vasp"
+            
+            if os.path.exists(unit_cell_poscar) and os.path.exists(supercell_poscar):
+                predictions = ml.predict_from_poscar([unit_cell_poscar, supercell_poscar])
+                
+                print("\nPOSCAR Prediction Results:")
+                print(f"Unit cell energy per atom: {predictions[0][0]:.6f} eV/atom (atoms: {predictions[0][1]})")
+                print(f"Supercell energy per atom: {predictions[1][0]:.6f} eV/atom (atoms: {predictions[1][1]})")
+                
+                # Calculate percent difference
+                if abs(predictions[0][0]) > 1e-6:  # Avoid division by zero
+                    percent_diff = abs(predictions[1][0] - predictions[0][0]) / abs(predictions[0][0]) * 100
+                    print(f"Percent difference: {percent_diff:.4f}%")
+            else:
+                print("POSCAR files not found. Update the paths to test this feature.")
                 
     except Exception as e:
         print(f"Error: {str(e)}")

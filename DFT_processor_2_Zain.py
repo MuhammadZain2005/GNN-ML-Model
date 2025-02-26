@@ -64,7 +64,7 @@ class DFTProcessor:
         try:
             positions = np.array(atom_positions)
             n_atoms = len(positions)
-            
+
             # Calculate pairwise distances and create edges
             edge_index = []
             for i in range(n_atoms):
@@ -74,13 +74,13 @@ class DFTProcessor:
                         distance = np.sqrt(np.sum(diff**2))
                         if distance < cutoff:
                             edge_index.append([i, j])
-            
+
             if not edge_index:
                 print("No edges found within cutoff distance")
                 return None
-                
+
             edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
-            
+
             # Create node features: [atomic_number, x, y, z, fx, fy, fz]
             features = []
             for i in range(n_atoms):
@@ -90,25 +90,25 @@ class DFTProcessor:
                     *positions[i],
                     *forces[i]
                 ])
-            
+
             x = torch.tensor(features, dtype=torch.float)
-            
+
             # Normalize energy by number of atoms
             normalized_energy = energy / n_atoms
             y = torch.tensor([normalized_energy], dtype=torch.float)
-            
+
             # Store both normalized and raw energy in the graph
             # This allows us to convert back if needed
             graph = Data(x=x, edge_index=edge_index, y=y)
             graph.raw_energy = torch.tensor([energy], dtype=torch.float)
             graph.n_atoms = n_atoms
-            
+
             return graph
-            
+
         except Exception as e:
             print(f"Error building graph: {e}")
             return None
-
+    
     def process_directory(self):
         """Process all DFT calculations in directory recursively"""
         self.graphs = []  # Reset graphs list
