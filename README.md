@@ -1,4 +1,4 @@
-<h1 align="center">GNN-ML-Model</h1>
+<h1 align="center">GNN-CeramicMap</h1>
 
 <p align="center">
     <img src="https://img.shields.io/badge/Made%20with-Python-blue.svg" alt="Made with Python">
