@@ -1,7 +1,7 @@
 import torch
 from torch_geometric.loader import DataLoader
 from DFT_processor_2_Zain import DFTProcessor
-from gnn_model_new import EnhancedGNNModel, GNNModel
+from gnn_model import EnhancedGNNModel, GNNModel
 import os
 import numpy as np
 from torch_geometric.data import Data
@@ -155,7 +155,7 @@ class MaterialML:
                 patience_counter += 1
                 if patience_counter >= patience:
                     print(f"Early stopping at epoch {epoch+1}")
-                    break
+                    break # make val loss lower dont early stop 
         
         self.load_model(model_path)
         print(f"Training completed. Best validation loss: {best_val_loss:.6f}")
@@ -189,7 +189,7 @@ class MaterialML:
         graph = processor.build_graph(atom_positions, atom_types, forces, energy, lattice_vectors, cutoff)
         return graph
 
-    def predict_from_poscar(self, poscar_files, cutoff=3.0):
+    def predict_from_poscar(self, poscar_files, cutoff=2.8): # CHANGED CUTOFF FROM 3 to 2.8 current percent difference is 23.0949%
         """
         Make predictions using only POSCAR files with enhanced PBC support.
         """
@@ -266,7 +266,6 @@ class MaterialML:
 
 
 if __name__ == "__main__":
-    # Example usage
     dft_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "DFT_data", "DFT_data")
     print(f"Using DFT data path: {dft_path}")
     
@@ -353,3 +352,10 @@ if __name__ == "__main__":
                 print("POSCAR files not found. Update the paths to test this feature.")
     except Exception as e:
         print(f"Error: {str(e)}")
+
+
+# Energy Parity Plot x= dft energies y= GNN energies (predicted) x=y line
+
+# Try cutoff functions sinh tanh, 6.5 highest distance
+
+# try to get better validation loss by running for more epochs and better early stopping approach.

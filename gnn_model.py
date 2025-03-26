@@ -15,14 +15,15 @@ class EdgeConv(MessagePassing):
             Linear(out_channels, out_channels)
         )
         
-        # Corrected edge feature transformation
+        # Edge feature transformation
         self.edge_mlp = Sequential(
-            Linear(out_channels * 2 + 1, out_channels),  # Fix here
+            Linear(out_channels * 2 + 1, out_channels), # +1 for edge distance
             ReLU(),
             Linear(out_channels, out_channels)
         )
 
     def forward(self, x, edge_index, edge_attr):
+        
         # Transform node features
         x = self.node_mlp(x)
         
@@ -36,8 +37,7 @@ class EdgeConv(MessagePassing):
 
     def update(self, aggr_out, x):
         # Update node embeddings
-        return aggr_out + x  # Residual connection
-
+        return aggr_out + x 
 
 class EnhancedGNNModel(torch.nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim):
@@ -81,11 +81,11 @@ class EnhancedGNNModel(torch.nn.Module):
 
         # Second GNN layer with edge attributes and residual connection
         x2 = F.relu(self.bn2(self.conv2(x1, edge_index, edge_attr)))
-        x2 = self.dropout(x2) + x1  # Residual connection
+        x2 = self.dropout(x2) + x1 
 
         # Third GNN layer with edge attributes and residual connection
         x3 = F.relu(self.bn3(self.conv3(x2, edge_index, edge_attr)))
-        x3 = self.dropout(x3) + x2  # Residual connection
+        x3 = self.dropout(x3) + x2  
 
         # Global Mean Pooling
         x = global_mean_pool(x3, batch)

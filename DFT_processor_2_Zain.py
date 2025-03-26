@@ -79,7 +79,7 @@ class DFTProcessor:
                         final_forces.append(forces)
         return final_energy, final_forces
 
-    def build_graph(self, atom_positions, atom_types, forces, energy, lattice_vectors, cutoff=3.15):
+    def build_graph(self, atom_positions, atom_types, forces, energy, lattice_vectors, cutoff=3.15): #try 6.4 initially 3.15
         """
         Constructs a torch_geometric Data object from the atomic structure,
         using enhanced periodic boundary conditions to compute edges.
@@ -95,15 +95,15 @@ class DFTProcessor:
             offsets = []
             for i in [-1, 0, 1]:
                 for j in [-1, 0, 1]:
-                    for k in [-1, 0, 1]:
-                        offsets.append(np.array([i, j, k]))
+                    for k_off in [-1, 0, 1]:
+                        offsets.append(np.array([i, j, k_off]))
             
             # Check distances including periodic images
             for i in range(n_atoms):
                 for j in range(n_atoms):  # Consider all atom pairs, including self under PBC
                     if i == j and np.array_equal(offsets[0], [0, 0, 0]):
                         continue  # Skip self-interaction in the original cell
-                        
+                    
                     # Check atom j and its periodic images
                     for offset in offsets:
                         if i == j and np.array_equal(offset, [0, 0, 0]):
@@ -118,7 +118,6 @@ class DFTProcessor:
                         
                         if distance < cutoff:
                             edge_list.append([i, j])
-                            # Store distance as edge attribute
                             edge_attrs.append([distance])
             
             if not edge_list:
@@ -151,6 +150,7 @@ class DFTProcessor:
         except Exception as e:
             print(f"Error building graph: {e}")
             return None
+
 
     @staticmethod
     def minimum_image_distance(pos_i, pos_j, lattice_vectors):
@@ -247,3 +247,4 @@ class DFTProcessor:
         print(f"Total graphs created: {len(self.graphs)}")
         
         return self.graphs
+    
