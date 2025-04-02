@@ -95,8 +95,9 @@ class MaterialML:
                 print(f"Edges crossing periodic boundaries: {boundary_edges}")
                 print(f"Box dimensions: {box_dims}")
                 print()
-# CHANGED PATIENCE FROM 20 --> 30 & LR FROM 0.0005 --> 0.0001
-    def train(self, train_loader, val_loader, hidden_dim=128, lr=0.0001, epochs=200):
+
+# Increased epochs, LR scheduling, Early stopping, Periodic checkpointing
+    def train(self, train_loader, val_loader, hidden_dim=128, lr=0.0001, epochs=500):
         """Train GNN model with updated parameters"""
         input_dim = train_loader.dataset[0].x.shape[1]  # Number of node features
         output_dim = 1  # Energy prediction (assumed to be energy per atom)
@@ -111,12 +112,15 @@ class MaterialML:
             model_path = os.path.join(self.models_dir, "best_model.pth")
             print("Using original GNNModel")
             
+
         optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr)
         criterion = torch.nn.MSELoss()
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10)
+
         
         best_val_loss = float('inf')
-        patience = 30
         patience_counter = 0
+        patience = 50
         
         train_losses = []
         val_losses = []
@@ -146,6 +150,8 @@ class MaterialML:
             
             print(f"Epoch {epoch+1}/{epochs} | Train Loss: {avg_train_loss:.6f} | Val Loss: {avg_val_loss:.6f}")
             
+            scheduler.step(avg_val_loss)
+
             if avg_val_loss < best_val_loss:
                 best_val_loss = avg_val_loss
                 patience_counter = 0
@@ -155,7 +161,11 @@ class MaterialML:
                 patience_counter += 1
                 if patience_counter >= patience:
                     print(f"Early stopping at epoch {epoch+1}")
-                    break # make val loss lower dont early stop 
+                    break # make val loss lower dont early stop
+            if epoch % 50 == 0:
+                checkpoint_path = os.path.join(self.models_dir, f"model_checkpoint_epoch_{epoch}.pth")
+                self.save_model(checkpoint_path)
+
         
         self.load_model(model_path)
         print(f"Training completed. Best validation loss: {best_val_loss:.6f}")
