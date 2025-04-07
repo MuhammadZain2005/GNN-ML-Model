@@ -6,9 +6,10 @@ import os
 import numpy as np
 from torch_geometric.data import Data
 import matplotlib.pyplot as plt
+from sklearn.metrics import r2_score, mean_squared_error
 
 class MaterialML:
-    def __init__(self, dft_data_path, use_enhanced_model=True):
+    def __init__(self, dft_data_path, use_enhanced_model=True, focus_hard=False):
         """
         Initialize with path to DFT data
         
@@ -17,9 +18,11 @@ class MaterialML:
             use_enhanced_model: Whether to use the enhanced model with edge attributes
         """
         self.dft_data_path = dft_data_path
+        self.use_enhanced_model = use_enhanced_model
+        self.focus_hard = focus_hard  # New flag for focusing on hard examples
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.graphs = None  # Will store processed graphs
         self.model = None
-        self.use_enhanced_model = use_enhanced_model
         
         # Create models directory if it doesn't exist
         self.models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
@@ -30,7 +33,7 @@ class MaterialML:
         """Process DFT data and prepare training set"""
         processor = DFTProcessor(self.dft_data_path)
         self.graphs = processor.process_directory()
-        
+    
         if not self.graphs:
             raise ValueError("No valid graphs were created. Check DFT data and processing steps.")
         
@@ -96,13 +99,13 @@ class MaterialML:
                 print(f"Box dimensions: {box_dims}")
                 print()
 
-# Increased epochs, LR scheduling, Early stopping, Periodic checkpointing
+    # Increased epochs, LR scheduling, Early stopping, Periodic checkpointing
     def train(self, train_loader, val_loader, hidden_dim=128, lr=0.0001, epochs=500):
-        """Train GNN model with updated parameters"""
-        input_dim = train_loader.dataset[0].x.shape[1]  # Number of node features
-        output_dim = 1  # Energy prediction (assumed to be energy per atom)
-        
-        # Choose model type based on initialization parameter
+        """Train GNN model with optional hard example emphasis"""
+        input_dim = train_loader.dataset[0].x.shape[1]
+        output_dim = 1
+
+        # Model initialization
         if self.use_enhanced_model:
             self.model = EnhancedGNNModel(input_dim, hidden_dim, output_dim)
             model_path = os.path.join(self.models_dir, "best_enhanced_model.pth")
@@ -111,45 +114,59 @@ class MaterialML:
             self.model = GNNModel(input_dim, hidden_dim, output_dim)
             model_path = os.path.join(self.models_dir, "best_model.pth")
             print("Using original GNNModel")
-            
 
         optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr)
         criterion = torch.nn.MSELoss()
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10)
 
-        
         best_val_loss = float('inf')
         patience_counter = 0
         patience = 50
-        
+
         train_losses = []
         val_losses = []
-        
+
         for epoch in range(epochs):
             self.model.train()
             total_loss = 0
+
             for batch in train_loader:
                 optimizer.zero_grad()
-                out = self.model(batch)
-                loss = criterion(out.squeeze(-1), batch.y)
+                out = self.model(batch).squeeze(-1)
+
+                if self.focus_hard:
+                    # Calculate absolute error
+                    error = torch.abs(out - batch.y)
+                    threshold = error.mean().item()
+                    mask = (error > threshold).float()
+
+                    # Use masked MSE
+                    if mask.sum().item() > 0:
+                        loss = ((out - batch.y) ** 2 * mask).sum() / (mask.sum() + 1e-6)
+                    else:
+                        loss = criterion(out, batch.y)
+                else:
+                    loss = criterion(out, batch.y)
+
                 loss.backward()
                 optimizer.step()
                 total_loss += loss.item()
-            
+
             avg_train_loss = total_loss / len(train_loader)
             train_losses.append(avg_train_loss)
-            
+
+            # Validation
             self.model.eval()
             val_loss = 0
             with torch.no_grad():
                 for batch in val_loader:
-                    out = self.model(batch)
-                    val_loss += criterion(out.squeeze(-1), batch.y).item()
+                    out = self.model(batch).squeeze(-1)
+                    val_loss += criterion(out, batch.y).item()
             avg_val_loss = val_loss / len(val_loader)
             val_losses.append(avg_val_loss)
-            
+
             print(f"Epoch {epoch+1}/{epochs} | Train Loss: {avg_train_loss:.6f} | Val Loss: {avg_val_loss:.6f}")
-            
+
             scheduler.step(avg_val_loss)
 
             if avg_val_loss < best_val_loss:
@@ -161,16 +178,16 @@ class MaterialML:
                 patience_counter += 1
                 if patience_counter >= patience:
                     print(f"Early stopping at epoch {epoch+1}")
-                    break # make val loss lower dont early stop
+                    break
+
             if epoch % 50 == 0:
                 checkpoint_path = os.path.join(self.models_dir, f"model_checkpoint_epoch_{epoch}.pth")
                 self.save_model(checkpoint_path)
 
-        
         self.load_model(model_path)
         print(f"Training completed. Best validation loss: {best_val_loss:.6f}")
-        
-        # Plot training history
+
+        # Plot
         plt.figure(figsize=(10, 6))
         plt.plot(train_losses, label='Training Loss')
         plt.plot(val_losses, label='Validation Loss')
@@ -280,7 +297,7 @@ if __name__ == "__main__":
     print(f"Using DFT data path: {dft_path}")
     
     try:
-        ml = MaterialML(dft_path)
+        ml = MaterialML(dft_path, focus_hard=True)
         train_loader, val_loader = ml.prepare_data()
         
         # Print training data statistics (energy per atom, system size, etc.)
@@ -332,7 +349,50 @@ if __name__ == "__main__":
                 print(f"Average absolute error per atom: {avg_error_per_atom:.4f} eV/atom")
                 print(f"Average absolute total error: {avg_error_total:.4f} eV")
                 break
+            ml.model.train()
         
+        # === Energy Parity Plot ===
+        dft_energies = batch.y.cpu().numpy()
+        pred_energies = pred.cpu().numpy()
+
+        plt.figure(figsize=(8, 8))
+        plt.scatter(dft_energies, pred_energies, alpha=0.6, edgecolors='k', s=60)
+        plt.plot([min(dft_energies), max(dft_energies)],
+                [min(dft_energies), max(dft_energies)], 'r--', label='x = y')
+        plt.xlabel("DFT Energy per Atom (eV)")
+        plt.ylabel("Predicted (GNN) Energy per Atom (eV)")
+        plt.title("Energy Parity Plot")
+        plt.legend()
+        plt.grid(True)
+
+        n_points = len(dft_energies)
+        plt.text(
+            0.95, 0.05,
+            f"N = {n_points}",
+            transform=plt.gca().transAxes,
+            fontsize=12,
+            ha='right',
+            va='bottom',
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="gray", alpha=0.7))
+        # Compute R² and MSE
+        r2 = r2_score(dft_energies, pred_energies)
+        mse = mean_squared_error(dft_energies, pred_energies)
+
+        # Add R² and MSE to top-left corner
+        plt.text(
+            0.05, 0.95,
+            f"$R^2$ = {r2:.4f}\nMSE = {mse:.4f}",
+            transform=plt.gca().transAxes,
+            fontsize=12,
+            ha='left',
+            va='top',
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="gray", alpha=0.7))
+
+        parity_plot_path = os.path.join(ml.models_dir, 'energy_parity_plot.png')
+        plt.savefig(parity_plot_path)
+        plt.show()
+        print(f"Energy parity plot saved to {parity_plot_path}")
+
         # Test POSCAR-only predictions
         print("\nTesting prediction from POSCAR files:")
         model_path = os.path.join(ml.models_dir, "best_enhanced_model.pth")
@@ -364,8 +424,6 @@ if __name__ == "__main__":
         print(f"Error: {str(e)}")
 
 
-# Energy Parity Plot x= dft energies y= GNN energies (predicted) x=y line
+# Energy Parity Plot x= dft energies y= GNN energies (predicted) x=y line - DONE
 
 # Try cutoff functions sinh tanh, 6.5 highest distance
-
-# try to get better validation loss by running for more epochs and better early stopping approach.

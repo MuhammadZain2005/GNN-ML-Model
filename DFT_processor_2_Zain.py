@@ -79,79 +79,86 @@ class DFTProcessor:
                         final_forces.append(forces)
         return final_energy, final_forces
 
-    def build_graph(self, atom_positions, atom_types, forces, energy, lattice_vectors, cutoff=3.15): #try 6.4 initially 3.15
+    def build_graph(self, atom_positions, atom_types, forces, energy, lattice_vectors, cutoff=3.2):
         """
         Constructs a torch_geometric Data object from the atomic structure,
         using enhanced periodic boundary conditions to compute edges.
-        Now includes connections to atoms in neighboring periodic cells.
+        Includes dynamic soft cutoff and atom-type-aware edge weighting.
         """
         try:
             positions = np.array(atom_positions)
             n_atoms = len(positions)
             edge_list = []
             edge_attrs = []
-            
+
             # Generate offsets for nearest neighbor cells (including the original cell)
             offsets = []
             for i in [-1, 0, 1]:
                 for j in [-1, 0, 1]:
                     for k_off in [-1, 0, 1]:
                         offsets.append(np.array([i, j, k_off]))
-            
+
             # Check distances including periodic images
             for i in range(n_atoms):
-                for j in range(n_atoms):  # Consider all atom pairs, including self under PBC
+                for j in range(n_atoms):
                     if i == j and np.array_equal(offsets[0], [0, 0, 0]):
                         continue  # Skip self-interaction in the original cell
-                    
-                    # Check atom j and its periodic images
+
                     for offset in offsets:
                         if i == j and np.array_equal(offset, [0, 0, 0]):
-                            continue  # Skip self in original cell
-                            
-                        # Calculate position of atom j in this periodic image
+                            continue
+
                         image_pos = positions[j] + np.dot(offset, lattice_vectors)
-                        
-                        # Calculate direct distance
                         diff = positions[i] - image_pos
                         distance = np.linalg.norm(diff)
-                        
+
                         if distance < cutoff:
+                            # Step 4: Atom-type pair-based weight scaling
+                            if atom_types[i] == "B" and atom_types[j] == "C":
+                                pair_scale = 1.0
+                            else:
+                                pair_scale = 0.8  # You can fine-tune this
+
+                            # Step 2: Cosine cutoff function
+                            cos_cutoff = 0.5 * (np.cos(np.pi * distance / cutoff) + 1)
+                            soft_weight = cos_cutoff * pair_scale
+
+                            # Edge attribute: scaled weighted distance
+                            weighted_dist = distance * soft_weight
+
                             edge_list.append([i, j])
-                            edge_attrs.append([distance])
-            
+                            edge_attrs.append([weighted_dist])
+
             if not edge_list:
                 print("No edges found within cutoff distance")
                 return None
-                
+
             edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
             edge_attr = torch.tensor(edge_attrs, dtype=torch.float)
-            
-            # Build node features: [atomic_number, x, y, z, fx, fy, fz]
+
+            # Node features: [atomic_number, x, y, z, fx, fy, fz]
             features = []
             for i in range(n_atoms):
                 atomic_number = 5 if atom_types[i] == "B" else 6  # B=5, C=6
                 features.append([atomic_number, *positions[i], *forces[i]])
             x = torch.tensor(features, dtype=torch.float)
-            
+
             # Normalize energy by number of atoms
             normalized_energy = energy / n_atoms
             y = torch.tensor([normalized_energy], dtype=torch.float)
-            
-            # Create the Data object with edge attributes
+
+            # Build final graph
             graph = Data(x=x, edge_index=edge_index, edge_attr=edge_attr, y=y)
             graph.raw_energy = torch.tensor([energy], dtype=torch.float)
             graph.n_atoms = n_atoms
-            
-            # Store lattice vectors for possible later use
             graph.lattice = torch.tensor(lattice_vectors, dtype=torch.float)
-            
+
             return graph
+
         except Exception as e:
             print(f"Error building graph: {e}")
             return None
-
-
+        
     @staticmethod
     def minimum_image_distance(pos_i, pos_j, lattice_vectors):
         """
