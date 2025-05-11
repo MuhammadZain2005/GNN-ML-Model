@@ -1,7 +1,10 @@
 import torch
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv, GINConv, global_mean_pool, BatchNorm, MessagePassing
-from torch.nn import Sequential, Linear, ReLU
+from torch.nn import Sequential, Linear, ReLU, Parameter
+import e3nn
+from e3nn import o3
+from e3nn.o3 import FullyConnectedTensorProduct, Irreps
 
 # Custom GNN layer that incorporates edge features/distances
 class EdgeConv(MessagePassing):
@@ -38,6 +41,127 @@ class EdgeConv(MessagePassing):
     def update(self, aggr_out, x):
         # Update node embeddings
         return aggr_out + x 
+
+# Simplified equivariant layer to avoid complex irreps operations
+class SimpleEquivariantGNNModel(torch.nn.Module):
+    def __init__(self, input_dim, hidden_dim=128, output_dim=1):
+        """
+        Simplified equivariant model for Week 1 implementation testing.
+        Uses position gradients but with simplified architecture.
+        
+        Args:
+            input_dim: Number of node features (scalar features)
+            hidden_dim: Size of hidden layers
+            output_dim: Output size (1 for energy prediction)
+        """
+        super(SimpleEquivariantGNNModel, self).__init__()
+        
+        # Regular GNN layers for scalar features
+        self.conv1 = EdgeConv(input_dim, hidden_dim)
+        self.conv2 = EdgeConv(hidden_dim, hidden_dim)
+        
+        # Batch Normalization
+        self.bn1 = BatchNorm(hidden_dim)
+        self.bn2 = BatchNorm(hidden_dim)
+        
+        # Shared linear layer for both heads
+        self.shared_layer = torch.nn.Linear(hidden_dim, hidden_dim)
+        
+        # Energy prediction head (scalar prediction)
+        self.energy_head = torch.nn.Sequential(
+            torch.nn.Linear(hidden_dim, output_dim)
+        )
+        
+        # Force prediction head (vector prediction per atom)
+        self.force_head = torch.nn.Sequential(
+            torch.nn.Linear(hidden_dim, hidden_dim),
+            torch.nn.ReLU(),
+            torch.nn.Linear(hidden_dim, 3)  # 3D force vector per atom
+        )
+        
+        # Dropout for regularization
+        self.dropout = torch.nn.Dropout(p=0.2)
+        
+    def forward(self, data):
+        """
+        Forward pass through the model.
+        Returns both energy prediction and force prediction.
+        """
+        # Ensure position gradient tracking for autograd forces
+        pos = data.x[:, 1:4].clone()
+        pos.requires_grad_(True)
+        
+        # Replace position in features with gradable version
+        x = torch.cat([data.x[:, 0:1], pos, data.x[:, 4:]], dim=1)
+        
+        edge_index = data.edge_index
+        edge_attr = data.edge_attr
+        batch = data.batch
+        batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device) if batch is None else batch
+        
+        # Apply convolutional layers
+        x1 = F.relu(self.bn1(self.conv1(x, edge_index, edge_attr)))
+        x1 = self.dropout(x1)
+        
+        x2 = F.relu(self.bn2(self.conv2(x1, edge_index, edge_attr)))
+        x2 = self.dropout(x2) + x1  # Residual connection
+        
+        # Apply shared layer
+        shared_features = F.relu(self.shared_layer(x2))
+        
+        # Per-node features for force prediction
+        node_features = shared_features
+        
+        # Global pooling for energy prediction
+        global_features = global_mean_pool(shared_features, batch)
+        
+        # Energy prediction (scalar)
+        energy_pred = self.energy_head(global_features)
+        
+        # Force prediction (vector per atom)
+        force_pred = self.force_head(node_features)
+        
+        # Return both predictions
+        return energy_pred, force_pred, pos
+    
+    def compute_autograd_forces(self, energy, pos):
+        """
+        Compute forces as the negative gradient of energy with respect to positions.
+        
+        Args:
+            energy: Predicted energy
+            pos: Atomic positions with gradients tracked
+            
+        Returns:
+            forces: Predicted forces from autograd
+        """
+        forces = -torch.autograd.grad(
+            energy.sum(), 
+            pos, 
+            create_graph=True, 
+            retain_graph=True
+        )[0]
+        return forces
+    
+    def predict(self, data):
+        """
+        Prediction mode with both direct force prediction and autograd forces.
+        """
+        self.eval()
+        with torch.set_grad_enabled(True):  # Need gradients for autograd forces
+            energy_pred, force_pred, pos = self(data)
+            autograd_forces = self.compute_autograd_forces(energy_pred, pos)
+            
+            return {
+                'energy': energy_pred,
+                'forces_direct': force_pred,
+                'forces_autograd': autograd_forces,
+                'positions': pos
+            }
+
+# For now, set EquivariantGNNModel as an alias to SimpleEquivariantGNNModel
+# This will be replaced with proper equivariant implementation in later weeks
+EquivariantGNNModel = SimpleEquivariantGNNModel
 
 class EnhancedGNNModel(torch.nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim):
